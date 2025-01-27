@@ -164,6 +164,12 @@ function bost_override_checkout_city_fields($fields)
     return $fields;
 }
 
+add_action('woocommerce_admin_order_data_after_billing_address', 'add_hidden_district_id_to_order_details', 10, 1);
+function add_hidden_district_id_to_order_details($order){
+    $district_id = get_post_meta($order->get_id(), '_district_id', true);
+    echo '<input type="hidden" name="district_id" value="' . esc_attr($district_id) . '" />';
+}
+
 add_action('admin_head', 'woocommerce_admin_init');
 function woocommerce_admin_init()
 {
@@ -185,17 +191,31 @@ function woocommerce_admin_init()
                 var opa = <?php echo json_encode($options_a); ?>,
                     select1 = 'select[name="_shipping_city"]',
                     select2 = 'select[name="_shipping_state"]';
-                select3 = 'select[name="_billing_city"]',
+                    select3 = 'select[name="_billing_city"]',
                     select4 = 'select[name="_billing_state"]';
+                    
                 var cities = <?php echo json_encode($resultCities); ?>;
 
                 function dynamicSelectOptions(opt, type) {
                     var options = '';
                     $.each(opt, function(key, value) {
-                        options += '<option value="' + value.zoneName + ' - ' + value.districtName + '">' + value.zoneName + ' - ' + value.districtName + '</option>';
+                        options += '<option value="' + value.zoneName + ' - ' + value.districtName + '" data-district-id="' + value.districtId + '">' + value.zoneName + ' - ' + value.districtName + '</option>';
                     });
-                    type === 'shipping' ? $(select2).html(options) : $(select4).html(options);
+                    updateDistrictId('district_id');
+                    function updateDistrictId(inputName) {
+                        $(select2).html(options);
+
+                        var districtId = $(select2).find('option:first').data('district-id');
+                        $('input[name="' + inputName + '"]').val(districtId);
+
+                        $(select2).change(function() {
+                            districtId = $(this).find('option:selected').data('district-id');
+                            $('input[name="' + inputName + '"]').val(districtId);
+                            console.log(districtId);
+                        });
+                    }
                 }
+
                 $(select1).change(function() {
 
                     for (let i = 0; i < cities.length; i++) {
@@ -221,6 +241,7 @@ function woocommerce_admin_init()
     <?php
     }
 }
+
 add_filter('woocommerce_admin_billing_fields', 'admin_order_pages_bosta_city_fields');
 add_filter('woocommerce_admin_shipping_fields', 'admin_order_pages_bosta_city_fields');
 function admin_order_pages_bosta_city_fields($fields)
@@ -337,14 +358,20 @@ function bost_custom_checkout_fields()
 
     $options_a = $states;
     $required = esc_attr__('required', 'woocommerce');
+
+    ?>
+    <input type="hidden" name="district_id" value="" />
+    <?php
+
     ?>
     <script>
         jQuery(function($) {
             var opa = <?php echo json_encode($options_a); ?>,
                 select1 = 'select[name="billing_city"]',
                 select2 = 'select[name="billing_state"]';
-            select3 = 'select[name="shipping_city"]',
+                select3 = 'select[name="shipping_city"]',
                 select4 = 'select[name="shipping_state"]';
+
             var selectedCityVal = $("#billing_city option:selected").val();
             var selectedAreaVal = $("#billing_state option:selected").val();
 
@@ -355,11 +382,28 @@ function bost_custom_checkout_fields()
                 }
 
                 var options = '';
-                $.each(opt, function(key, value) {
-                    const newKey = index + key;
+                $.each( opt, function( key, value ){
+                    const newKey=index+key;
                     options += '<option value="' + newKey + '" data-district-id="' + value.districtId + '">' + value.zoneName + ' - ' + value.districtName + '</option>';
                 });
-                type === 'billing' ? $(select2).html(options) : $(select4).html(options);
+                
+                function updateDistrictId(selectElement, inputName) {
+                    $(selectElement).html(options);
+
+                    var districtId = $(selectElement).find('option:first').data('district-id');
+                    $('input[name="' + inputName + '"]').val(districtId);
+
+                    $(selectElement).change(function() {
+                        districtId = $(this).find('option:selected').data('district-id');
+                        $('input[name="' + inputName + '"]').val(districtId);
+                    });
+                }
+
+                if (type === 'billing') {
+                    updateDistrictId(select2, 'district_id');
+                } else {
+                    updateDistrictId(select4, 'district_id');
+                }
             }
 
             $(select1).change(function() {
@@ -378,6 +422,16 @@ function bost_custom_checkout_fields()
         });
     </script>
     <?php
+}
+
+add_action('woocommerce_checkout_update_order_meta', 'bosta_save_district_id_from_hidden_field', 10, 2);
+add_action('woocommerce_process_shop_order_meta', 'bosta_save_district_id_from_hidden_field', 10, 2);
+function bosta_save_district_id_from_hidden_field($order_id, $posted_data)
+{   
+    if (!empty($_POST['district_id'])) {
+        $district_id = sanitize_text_field($_POST['district_id']);
+        update_post_meta($order_id, '_district_id', $district_id);
+    }
 }
 
 function wco_add_columns($columns)
@@ -884,34 +938,8 @@ function bosta_action_woocommerce_update_order($order_get_id)
         ->dropOffAddress->firstLine = $order
         ->shipping->address_1;
 
-    global $resultStates;
-    if (is_numeric($order
-        ->shipping
-        ->state) === 1) {
-
-        $shippingDistrictId = array_merge(...$resultStates)[$order
-            ->shipping
-            ->state]->districtId;
-        $newOrder
-            ->dropOffAddress->districtId = $shippingDistrictId;
-    } else {
-        $result = preg_split("/\s*(?<!\w(?=.\w))[\-[\]()]\s*/", $order
-            ->shipping
-            ->state);
-
-        global $resultCities;
-        $shippingDistrictName = $result[1];
-        $shippingZoneName = $result[0];
-        $shippingCityName = $resultCities[$order
-            ->shipping
-            ->city];
-        $newOrder
-            ->dropOffAddress->districtName = $shippingDistrictName;
-        $newOrder
-            ->dropOffAddress->zone = $shippingZoneName;
-        $newOrder
-            ->dropOffAddress->city = $shippingCityName;
-    }
+    $newOrder->dropOffAddress->city = $order->shipping->city;
+    $newOrder->dropOffAddress->districtId = get_post_meta($order_get_id, '_district_id');
 
     if ($order->payment_method == 'cod') {
         $newOrder->cod = (float) $order->total;
